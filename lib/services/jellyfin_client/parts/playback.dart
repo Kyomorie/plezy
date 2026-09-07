@@ -807,6 +807,7 @@ mixin _JellyfinPlaybackMethods on _JellyfinClientInternals {
     final response = await _http.post(
       '/Items/${_segment(itemId)}/PlaybackInfo',
       queryParameters: query,
+      timeout: autoOpenLiveStream == true ? MediaServerTimeouts.tune : null,
       body: {
         'UserId': connection.userId,
         'MaxStreamingBitrate': ?maxStreamingBitrate,
