@@ -49,6 +49,14 @@ String _jellyfinTranscodeVideoCodecs(MediaBrowserDialect dialect) => [
 /// cannot carry it — that gap is why the fMP4 profile exists (#2131).
 String _jellyfinTranscodeVideoCodecsTs() => [if (VideoDecodeCapabilities.supportsHevc) 'hevc', 'h264'].join(',');
 
+Map<String, Object?> _jellyfinMpegTsTranscodeProfile() => {
+  'Type': 'Video',
+  'Container': 'ts',
+  'Protocol': 'hls',
+  'VideoCodec': _jellyfinTranscodeVideoCodecsTs(),
+  'AudioCodec': 'aac,mp3,ac3,eac3,opus,dts',
+};
+
 mixin _JellyfinPlaybackMethods on _JellyfinClientInternals {
   // Implemented by _JellyfinBrowseMethods (cross-part call, same pattern as
   // _JellyfinImageDownloadMethods' redeclarations).
@@ -804,6 +812,7 @@ mixin _JellyfinPlaybackMethods on _JellyfinClientInternals {
       'AllowVideoStreamCopy': ?allowVideoStreamCopy?.toString(),
       'AllowAudioStreamCopy': ?allowAudioStreamCopy?.toString(),
     };
+    final preferMpegTsHls = autoOpenLiveStream == true && dialect == MediaBrowserDialect.emby;
     final response = await _http.post(
       '/Items/${_segment(itemId)}/PlaybackInfo',
       queryParameters: query,
@@ -825,11 +834,14 @@ mixin _JellyfinPlaybackMethods on _JellyfinClientInternals {
           'Name': 'Plezy',
           'MaxStreamingBitrate': ?maxStreamingBitrate,
           'CodecProfiles': const <Map<String, Object?>>[],
-          // fMP4 segments instead of MPEG-TS (#2131): ts cannot carry AV1,
-          // so a server with an AV1 hardware encoder could never pick it.
-          // Every mpv backend already consumes fMP4 HLS — the Plex VOD
-          // target has shipped it since issue #1859.
           'TranscodingProfiles': <Map<String, Object?>>[
+            // Emby Web prefers MPEG-TS HLS for Live TV. Keep that
+            // interoperability choice scoped to Emby tune requests so
+            // Jellyfin and VOD retain their fMP4-first ordering (#2273).
+            if (preferMpegTsHls) _jellyfinMpegTsTranscodeProfile(),
+            // fMP4 segments instead of MPEG-TS (#2131): ts cannot carry AV1,
+            // so a server with an AV1 hardware encoder could never pick it.
+            // This remains the normal first choice for VOD and Jellyfin.
             {
               'Type': 'Video',
               'Container': 'mp4',
@@ -848,8 +860,8 @@ mixin _JellyfinPlaybackMethods on _JellyfinClientInternals {
               // cannot carry.
               'AudioCodec': 'aac,mp3,ac3,eac3,flac,opus,dts,truehd',
             },
-            // MPEG-TS fallback, listed second (#2198): Jellyfin drops every
-            // non-ts transcoding profile for a live source with
+            // MPEG-TS fallback for every other video request (#2198): Jellyfin
+            // drops every non-ts transcoding profile for a live source with
             // `UseMostCompatibleTranscodingProfile` — hardcoded true for
             // HDHomeRun tuners, default true for M3U tuners — so with fMP4
             // alone Live TV negotiates no HLS URL at all. Both codec lists
@@ -858,13 +870,7 @@ mixin _JellyfinPlaybackMethods on _JellyfinClientInternals {
             // entry has been filtered out: VOD keeps negotiating fMP4
             // (jellyfin-web ships the same mp4-then-ts pair). flac and
             // truehd are omitted because TS cannot carry them.
-            {
-              'Type': 'Video',
-              'Container': 'ts',
-              'Protocol': 'hls',
-              'VideoCodec': _jellyfinTranscodeVideoCodecsTs(),
-              'AudioCodec': 'aac,mp3,ac3,eac3,opus,dts',
-            },
+            if (!preferMpegTsHls) _jellyfinMpegTsTranscodeProfile(),
             // Track playback transcode target: stereo mp3 over plain http.
             // Appended after the video profile so the first-entry-wins
             // ordering for video output codecs is untouched.
